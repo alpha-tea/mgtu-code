@@ -1,4 +1,4 @@
-#include "task.h"
+#include "04_abstract_dictionary.h"
 
 int create_key_value(struct key_value* pair, char* key, void* value, unsigned int val_size)
 {
@@ -129,8 +129,10 @@ void destroy_dictionary(struct dictionary* dict)
         return;
     }
     printf("destroy dictionary with %d elements, pairs addresses:\n", dict->elements);
-    while (dict->elements--)
+    while (dict->elements) {
         destroy_key_value(dict->data + dict->elements);
+        --dict->elements;
+    }
     free(dict->data);
     free(dict->sizes);
     free(dict->types);
