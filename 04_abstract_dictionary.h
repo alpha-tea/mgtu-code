@@ -1,11 +1,11 @@
-#ifndef TASK_H
-#define TASK_H
+#ifndef ABSTRACT_DICTIONARY
+#define ABSTRACT_DICTIONARY
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum data_types { undefined, byte, word, floating, text};
+enum data_types { undefined, bytes, word, floating, text};
 
 static const char* type_names[] = {"data", "byte", "word", "float", "text"};
 
