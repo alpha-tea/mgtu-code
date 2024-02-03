@@ -46,5 +46,6 @@ int compare(struct rational* left, struct rational* right,
             int(*cmp)(struct rational*, struct rational*));
 double to_double(struct rational* src);
 int to_string(struct rational* src, char* string);
+int rational_numbers_tests();
 
 #endif

@@ -1,4 +1,4 @@
-#ifndef TEXT_COUNTER
+﻿#ifndef TEXT_COUNTER
 #define TEXT_COUNTER
 
 #include <stdio.h>

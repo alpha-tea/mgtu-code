@@ -1,12 +1,10 @@
-#include "01_calculate_arithmetics.h"
-#include "02_text_counter.h"
-#include "03_threads_philosophers.h"
-#include "04_abstract_dictionary.h"
-#include "06_rational_numbers.h"
+﻿#include <stdio.h>
 
 int main()
 {
-
+    printf("mgtu labs;\n");
+    printf("Size of char is %u, short is %u, int is %u bytes, address %u bits;\n",
+           sizeof(char), sizeof(short), sizeof(int), sizeof(char*) * 8);
     return 0;
 }
 

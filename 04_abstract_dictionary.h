@@ -1,4 +1,4 @@
-#ifndef ABSTRACT_DICTIONARY
+﻿#ifndef ABSTRACT_DICTIONARY
 #define ABSTRACT_DICTIONARY
 
 #include <stdio.h>

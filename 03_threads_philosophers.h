@@ -1,4 +1,4 @@
-#ifndef THREADS_PHILOSOPHER
+﻿#ifndef THREADS_PHILOSOPHER
 #define THREADS_PHILOSOPHER
 
 #include <pthread.h>

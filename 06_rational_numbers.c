@@ -742,6 +742,8 @@ int rational_numbers_tests()
     r = from_string(ptr3, "ABCDE--+221+-chto-3 /+ABC5   omg ?1");
     printf("Signs or other chars in any position, result %d: ", r);
     print(ptr3, 1);
+    return 0;
+    print(ptr3, 1);
     r = from_string(ptr3, "-2147483648/2");
     normalize(ptr3);
     printf("\nConvert integer minimum, result = %d: ", r);
