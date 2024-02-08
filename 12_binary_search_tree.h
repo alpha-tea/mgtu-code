@@ -8,7 +8,6 @@
 #include <time.h>
 
 #define MEM_MAX 0x8000
-#define IDX_MAX 0x7FFF
 #define OBJ_MAX 0x0100
 
 // Встроенные типы объектов для удобного вывода и тестирования. Неопределённые данные по умолчанию.

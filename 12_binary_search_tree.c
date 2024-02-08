@@ -210,7 +210,7 @@ struct node* traverse_pop(struct binary_tree* tree, struct node* stack[], short*
 {   // Вспомогательая функция
     struct node* leaf;
     char text[OBJ_MAX];
-    if ((*sp) <= IDX_MAX && (*sp) > 0) {
+    if ((*sp) > 0) {
         leaf = stack[--(*sp)];
         node_to_text(tree, leaf, text, 1);
         printf("Pop leaf at (%p), object '%s'\n", leaf, text);
@@ -607,31 +607,40 @@ short tree_compare(struct binary_tree* left, struct binary_tree* right, short is
 
 short tree_balance(struct binary_tree* dst, struct binary_tree* src)
 {   // Функция балансировки дерева, дополнительно.
-    if (dst == NULL || src == NULL || src->data_size == 0) {
+    if (dst == NULL || src == NULL || src->data_size == 0 || dst->data_size > 0) {
         printf("error in balance tree;\n");
         return err_incorrect;
     }
     printf("\nBalance tree using simple traverse and linear search;\n");
     tree_traverse(src, sr_node_left_right);
-    short i = 0, j = 0, k = 0, more, less, medium = 0,  diff = src->data_size;
-    for (i = 0; i < tree_nodes_size; ++i) {
-        more = less = 0;
-        for (j = 0; j < tree_nodes_size; ++j) {
-            if (i != j) {
-                if (nodes_compare(src, tree_nodes[i], tree_nodes[j]) == -1)
-                    less++;
-                else
-                    more++;
+    dst->obj_type = src->obj_type;
+    dst->obj_size = src->obj_size;
+    short i = 0, j = 0, k = 0, more, less, medium = 0,  diff = 0;
+    for (k = 0; k < src->data_size; ++k, --tree_nodes_size) {
+        medium = 0;
+        diff = src->data_size;
+        for (i = 0; i < tree_nodes_size; ++i) {
+            more = less = 0;
+            for (j = 0; j < tree_nodes_size; ++j) {
+                if (i != j) {
+                    if (nodes_compare(src, tree_nodes[i], tree_nodes[j]) == -1)
+                        less++;
+                    else
+                        more++;
+                }
+            }
+            if (diff > abs(less - more)) {
+                medium = i;
+                diff = abs(less - more);
             }
         }
-        if (diff > abs(less - more)) {
-            medium = i;
-            diff = abs(less - more);
-        }
+        char text[OBJ_MAX];
+        node_to_text(src, tree_nodes[medium], text, 1);
+        printf("medium node in tree '%s', index %hd;\n", text, medium);
+        tree_add_node(dst, tree_nodes[medium]->obj);
+        for (j = medium; j < tree_nodes_size; ++j)
+            tree_nodes[j] = tree_nodes[j + 1];
     }
-    char text[OBJ_MAX];
-    node_to_text(src, tree_nodes[medium], text, 1);
-    printf("medium node in tree '%s', index %hd;\n", text, medium);
     return err_ok;
 }
 
@@ -762,9 +771,11 @@ int binary_search_tree()
     tree_destroy(&tree_a);
     // Балансировка дерева
     char data_unb[] = "ABCDEFG";
+    tree_destroy(&tree_b);
     tree_create(&tree_a, data_unb, strlen(data_unb), sizeof(char), obj_text, 0);
-    tree_balance(&tree_b, &tree_a);
     tree_print(&tree_a, 1);
+    tree_balance(&tree_b, &tree_a);
+    tree_print(&tree_b, 1);
     // Удаление дерева для последующего перемещения
     printf("\nDestroy copy of tree and free nodes, memory used %hu;\n\n", memory_used);
     tree_destroy(&tree_a);
@@ -773,34 +784,13 @@ int binary_search_tree()
     // Удаление динамических объектов и проверка памяти
     printf("\nClear all tree, nodes and free dynamic memory;\n\n");
     tree_destroy(ptr_a);
+    tree_destroy(&tree_b);
     node_destroy(&leaf_a, 3);
     node_destroy(&leaf_b, strlen(data_text));
     //node_destroy(&leaf_c, obj_type_size[obj_word]);
     node_destroy(&leaf_d, obj_type_size[obj_float]);
     node_destroy(&leaf_e, strlen(data_text));
     printf("free memory %hu and memory used %hu bytes;\n", memory_free, memory_used);
-    /*
-    printf("\nCompare nodes with various types, 0 - equal, 1 - more, -1 - less;\n");
-    short res = nodes_compare(&tree_a, tree_a.root, &leaf_a);
-    printf("Compare text leaf_a and root, result %hd;\n", res);
-    tree_a.root->obj = &val_f; leaf_b.obj = &val_g;
-    tree_a.obj_type = obj_float; tree_a.data_size = obj_type_size[obj_float];
-    res = nodes_compare(&tree_a, tree_a.root, &leaf_b);
-    printf("Compare floating point %.2f and %.2f, epsilon = %.2f, result %hd;\n",
-           val_f, val_g, float_epsilon, res);
-    free(leaf_a.obj);   // warning
-    tree_a.data_size = 3; tree_a.root->obj = data_text[2];
-    tree_a.obj_type = obj_text; tree_a.obj_size = strlen(data_text[2]);
-    leaf_a.obj = data_text[1]; leaf_b.obj = data_text[3]; leaf_c.obj = data_text[1];
-    tree_a.root->left = &leaf_a; tree_a.root->right = &leaf_b;
-    leaf_ptr = tree_search_node(&tree_a, &leaf_c);
-    printf("\nSearch existed '%s' data node, nearest from %p, value '%s'\n",
-           data_text[1], leaf_ptr, (char*)leaf_ptr->obj);
-    leaf_c.obj = data_text[4];
-    leaf_ptr = tree_search_node(&tree_a, &leaf_c);
-    printf("\nSearch not existed '%s' data node, nearest from %p, value '%s'\n",
-           data_text[4], leaf_ptr, (char*)leaf_ptr->obj);
-           */
     return 0;
 }
 
