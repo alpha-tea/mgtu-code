@@ -17,8 +17,9 @@
 #define MEM_MAX 0x8000
 
 // Вспомогательное перечисление для всех частей полинома и операции сравнения.
-enum polynomial_extra { poly_nop, poly_con, poly_exp, poly_all, poly_equal, poly_less, poly_more,
-                      poly_full, poly_max, poly_min, poly_not};
+enum polynomial_extra { poly_nop = 0x00, poly_con = 0x01, poly_exp = 0x02, poly_all = 0x04, poly_equal = 0x08,
+                        poly_less = 0x10, poly_more = 0x20, poly_full = 0x40, poly_max = 0x80, poly_min = 0x100,
+                        poly_not};
 // Код возвращаемой ошибки
 enum errors_type {err_ok = 0, err_incorrect = 1, err_memory = 2, err_convert = 3, err_range = 4, err_not = 5};
 
@@ -36,8 +37,8 @@ static const unsigned char rnd_consts_max = 10, rnd_exps_max = 4;
 
 // Статичные переменные для всей программы.
 static unsigned short memory = MEM_MAX;
-static char element_fmt[] = "[%C^%E]";  // Формат элемента при преобразовании по умолчанию. | [%C^%E]
-                                          //разделитель пробел или табуляция
+static char element_fmt[] = "[%C%%%E]";  // Формат элемента при преобразовании по умолчанию. | [%C^%E]
+//разделитель пробел или табуляция
 
 char is_correct_polynomial(struct polynomial* obj)
 {   // проверка на пустоту и на NULL, если размер полинома больше нуля то проверить константы или экспоненты
@@ -185,7 +186,7 @@ char resize_polynomial(struct polynomial* obj, unsigned char new_size)
     unsigned char size = size_polynomial(obj);
     if (new_size == size) {
         printf("resize polynomial is equal to new size %hhu;\n", new_size);
-        return err_ok;
+        return err_incorrect;
     }
     obj->size = new_size;
     obj->constants = (char*)realloc(obj->constants, new_size * sizeof(char));
@@ -198,8 +199,8 @@ char resize_polynomial(struct polynomial* obj, unsigned char new_size)
     // memset(obj->constants + size, 0, (new_size - size) * sizeof(char));
     // memset(obj->exponents + size, 0, (new_size - size) * sizeof(unsigned char));
     for (unsigned char i = obj->size; i < new_size; ++i) {
-            obj->constants[i] = 0;
-            obj->exponents[i] = 0;
+        obj->constants[i] = 0;
+        obj->exponents[i] = 0;
     }
     memory -= element_size * (new_size - size);
     printf("Memory free: %hu\n", memory);
@@ -215,13 +216,16 @@ char set_constants(struct polynomial* obj, char* src, unsigned char src_size, un
         printf("set constants polynomial error: obj is NULL or src or index incorrect;\n");
         return err_incorrect;
     }       // проверку размера полинома отдельно, если ошибка выхода за индекс.
-    if (src_size + index >= size_polynomial(obj)) {
+    if (src_size + index > size_polynomial(obj)) {
         printf("error: outside the polynomial;\n");
         return err_range;
     }
-    printf("Set constants(%p) in object (%p), size %u, from index %u;\n", src, obj, src_size, index);
-    for (unsigned char i = index; i < src_size + index; ++i)
-        obj->constants[i] = src[i];
+    printf("Set constants(%p) in object (%p), size %u, from index %u: ", src, obj, src_size, index);
+    for (unsigned char i = 0; i < src_size; ++i) {
+        printf("%hhd[%hhu] ", src[i], (unsigned char)(index + i));
+        obj->constants[i + index] = src[i];
+    }
+    printf("\n");
     return err_ok;
 }
 
@@ -232,13 +236,16 @@ char set_exponents(struct polynomial* obj, unsigned char* src, unsigned char src
         printf("set exponents polynomial error: obj is NULL or src or index incorrect;\n");
         return err_incorrect;
     }
-    printf("Set exponents(%p) in object (%p), size %u, index %d;\n", src, obj, src_size, index);
-    if (src_size + index >= size_polynomial(obj)) {
+    printf("Set exponents(%p) in object (%p), size %u, index %d: ", src, obj, src_size, index);
+    if (src_size + index > size_polynomial(obj)) {
         printf("error: outside the polynomial;\n");
         return err_range;
     }
-    for (unsigned char i = index; i < src_size + index; ++i)
-        obj->exponents[i] = src[i];
+    for (unsigned char i = 0; i < src_size; ++i) {
+        printf("%hhu[%hhu] ", src[i], (unsigned char)(index + i));
+        obj->exponents[i + index] = src[i];
+    }
+    printf("\n");
     return err_ok;
 }
 
@@ -371,74 +378,73 @@ int from_string_polynomial(struct polynomial* obj, char* src)
     return err_ok;
 }
 
-void inc_polynomial(struct polynomial* obj, unsigned char index, enum polynomial_extra parts)
+char inc_polynomial(struct polynomial* obj, unsigned char index, unsigned char count, enum polynomial_extra parts)
 {   // Увеличение константы или экспоненты полинома по индексу. Тип увеличения по отдельности или вместе.
     if (is_correct_polynomial(obj) != err_ok || index >= size_polynomial(obj)
-            || parts < poly_con || parts > poly_all) {
+            || !(parts & poly_con || parts & poly_exp)) {
         printf("inc polynomial error: polynomial is incorrect or dst string is NULL;\n");
-        return;
+        return err_incorrect;
     }
-    if (parts == poly_con || parts == poly_all) {
-        if ((char)(obj->constants[index] + (char)(1)) == CHAR_MIN)
-            printf("warning inc polynomial: constants overflow!;\n");
-        obj->constants[index]++;
+    if (index + count > size_polynomial(obj)) {
+        printf("inc polynomial is out of range;\n");
+        return err_range;
     }
-    if (parts == poly_con || parts == poly_all) {
-        if ((unsigned char)(obj->exponents[index] + (unsigned char)(1)) == 0)
-            printf("warning inc polynomial: exponents overflow!;\n");
-        obj->exponents[index]++;
+    printf("Inc polynomial(%p) from index %hhu, counter %hhu, flags %X in hex;\n",
+           obj, index, count, parts);
+    while (count--) {
+        if ((parts & poly_con) != 0) {
+            char* consts = get_constants(obj, index);
+            if (*consts == CHAR_MAX)
+                printf("warning inc polynomial: constants at %hhu overflow!;\n", index);
+            (*consts)++;
+        }
+        if ((parts & poly_exp) != 0) {
+            unsigned char* exps = get_exponents(obj, index);
+            if (*exps == UCHAR_MAX)
+                printf("warning inc polynomial: exps at %hhu overflow!;\n", index);
+            (*exps)++;
+        }
+        index++;
     }
+    return err_ok;
 }
 
-void dec_polynomial(struct polynomial* obj, unsigned char index, enum polynomial_extra parts)
+char dec_polynomial(struct polynomial* obj, unsigned char index, unsigned char count, enum polynomial_extra parts)
 {   // Уменьшение константы или экспоненты полинома по индексу. Тип уменьшения по отдельности или вместе.
     if (is_correct_polynomial(obj) != err_ok || index >= size_polynomial(obj)
-            || parts < poly_con || parts > poly_all) {
+            || !(parts & poly_con || parts & poly_exp)) {
         printf("dec polynomial error: polynomial is incorrect or dst string is NULL;\n");
-        return;
+        return err_incorrect;
     }
-    if (parts == poly_con || parts == poly_all) { // проверка на переполнение
-        if ((char)(obj->constants[index] - 1) == CHAR_MAX)
-            printf("warning dec polynomial: constants overflow!;\n");
-        obj->constants[index]--;
+    if (index + count > size_polynomial(obj)) {
+        printf("dec polynomial is out of range;\n");
+        return err_range;
     }
-    if (parts == poly_con || parts == poly_all) {
-        if ((unsigned char)(obj->exponents[index] - 1) == UCHAR_MAX)
-            printf("warning dec polynomial: exponents overflow!;\n");
-        obj->exponents[index]--;
+    printf("Dec polynomial(%p) from index %hhu, counter %hhu, flags %X in hex;\n",
+           obj, index, count, parts);
+    while (count--) {
+        if ((parts & poly_con) != 0) {
+            char* consts = get_constants(obj, index);
+            if (*consts == CHAR_MIN)
+                printf("warning dec polynomial: constants at %hhu overflow!;\n", index);
+            (*consts)--;
+        }
+        if ((parts & poly_exp) != 0) {
+            unsigned char* exps = get_exponents(obj, index);
+            if (*exps == 0)
+                printf("warning dec polynomial: exps at %hhu overflow!;\n", index);
+            (*exps)--;
+        }
+        index++;
     }
+    return err_ok;
 }
 
 unsigned char degree(struct polynomial obj, enum polynomial_extra type)
-{   // Вычисление степен полинома
-
-}
-
-char add_polynomial(struct polynomial* left, struct polynomial* right)
-{   // Сложение полиномовв, правосторонний прибавляется к левоторонниму изменяя его значение.
-    // Допустимо сложение одного и того же объекта
-
-}
-
-char sub_polynomial(struct polynomial* left, struct polynomial* right)
-{   //
-
-}
-
-char mul_polynomial(struct polynomial* left, struct polynomial* right)
-{   // Усножение полиномовв, правосторонний прибавляется к левоторонниму изменяя его значение.
-    // Допустимо умножение одного и того же объекта
-
-}
-
-char div_polynomial(struct polynomial* left, struct polynomial* right)
-{   //  деление столбиком, возможно с отстатком
-
-}
-
-char compare_polynomial(struct polynomial* left, struct polynomial right, enum polynomial_extra type)
-{   // Сравнение полиномов. Размеры должны совпадать. На вход тип сравнения: равно, меньше или больше.
-
+{   // Вычисление степеней полинома
+    // poly_max - максимальная степень при x не равной нулю.
+    // poly_min - минимальная степень при x не равной нулю.
+    // poly_full - полная степень. Сумма всех степеней при x не равной нулю.
 }
 
 char compact_polynomial(struct polynomial* src)
@@ -467,6 +473,141 @@ char compact_polynomial(struct polynomial* src)
     resize_polynomial(src, size - compact);
     printf("compact polynomial %p: new size = %u;\n", src, size);
     return size - compact;
+}
+
+char add_polynomial(struct polynomial* left, struct polynomial* right, char is_compact)
+{   // Сложение полиномов, правосторонний прибавляется к левостороннему, изменяя его значение.
+    // Допустимо сложение одного и того же объекта.
+    if (is_correct_polynomial(left) != err_ok || is_correct_polynomial(right) != err_ok) {
+        printf("add polynomial error: polynomials is incorrect;\n");
+        return err_incorrect;
+    }
+    if (left != right)
+        printf("\nAdd left(%p) and right(%p) different polynomials;\n", left, right);
+    else
+        printf("\nAdd left(%p) and right(%p) same polynomials;\n", left, right);
+    print_polynomial(left, 1);
+    print_polynomial(right, 1);
+    unsigned char left_size = size_polynomial(left);
+    unsigned char right_size = size_polynomial(right);
+    if (right_size == 0) {
+        printf("Right polynomial is empty, nothing add to left;\n");
+        return err_ok;
+    }
+    char consts[DATA_MAX], is_found[DATA_MAX];
+    unsigned char exps[DATA_MAX], founded = 0;
+    for (short i = 0; i < DATA_MAX; ++i)
+        consts[i] = is_found[i] = 0;
+    unsigned char i, j;
+    for (i = 0; i < left_size; i++) {
+        char *left_consts = get_constants(left, i), *right_consts;
+        unsigned char *left_exps = get_exponents(left, i), *right_exps;
+        if (left != right) {
+            consts[i] = *left_consts;
+            exps[i] = *left_exps;
+            for (j = 0; j < right_size; ++j) {
+                right_exps = get_exponents(right, j);
+                if (*left_exps == *right_exps && !is_found[j]) {
+                    consts[i] += *get_constants(right, j);
+                    is_found[j] = 1;
+                    founded++;
+                }
+            }
+        } else {
+            consts[i] = *left_consts << 1;
+            exps[i] = *left_exps;
+            is_found[i] = 1;
+            founded++;
+        }
+    }
+    printf("Add %hhu byte elements from left and founded %hhu equal exponents from right;\n",
+           i, founded);
+    for (j = 0; j < right_size; ++j)
+        if (is_found[j] == 0) {
+            consts[i] = *get_constants(right, j);
+            exps[i] = *get_exponents(right, j);
+            i++;
+        }
+    printf("Size of new polynomail is %hhu, ", i);
+    if (left_size == 0) {
+        printf("left destination is empty, just create new;\n");
+        create_polynomial(left, i, consts, exps, 0);
+    } else {
+        printf("left destination size is %hhu, ", left_size);
+        if (i > left_size) {
+            printf("resize and set data;\n");
+            char err = resize_polynomial(left, i);
+            if (err != err_ok) {
+                printf("add polynomial: resize left polynomial error!;\n");
+                return err_memory;
+            }
+        } else
+            printf("size is equal, just set data;\n");
+        set_constants(left, consts, i, 0);
+        set_exponents(left, exps, i, 0);
+    }
+    if (is_compact)
+        compact_polynomial(left);
+    return err_ok;
+}
+
+char sub_polynomial(struct polynomial* left, struct polynomial* right)
+{   // Умножить константы правого на -1 и сложить. Правый сохранить как было.
+    if (is_correct_polynomial(left) != err_ok || is_correct_polynomial(right) != err_ok) {
+        printf("sub polynomial error: polynomials is incorrect;\n");
+        return err_incorrect;
+    }
+    unsigned char left_size = size_polynomial(left);
+    unsigned char right_size = size_polynomial(right);
+    char *left_consts = get_constants(left, 0), *right_consts = get_constants(right, 0);
+    unsigned char *left_exps = get_exponents(left, 0), *right_exps = get_exponents(right, 0);
+    for (unsigned char i = 0, j = 0; i < right_size;) {
+        for (j = 0; j < left_size; ++j) {
+            if (left_exps[j] == right_exps[i] && right_consts[i] < 0 && left_consts[j] < CHAR_MAX)
+                break;
+            if (left_exps[j] == right_exps[i] && right_consts[i] > 0 && left_consts[j] > CHAR_MIN)
+                break;
+        }
+        if (j == left_size) {
+            char err = resize_polynomial(left, left_size + 1);
+            if (err != err_ok) {
+                printf("sub polynomial: resize left polynomial error!;\n");
+                return err_memory;
+            }
+            left_consts[left_size] = -right_consts[i];
+            left_exps[left_size] = right_exps[i];
+            left_size++;
+            i++;
+        } else {
+            if ((left_consts[j] - right_consts[i]) > CHAR_MAX) {
+                right_consts[i] = right_consts[i] + (CHAR_MAX - left_consts[j]);
+                left_consts[j] = CHAR_MAX;
+            } else if ((left_consts[j] - right_consts[i]) < CHAR_MIN) {
+                right_consts[i] = right_consts[i] - (CHAR_MIN - left_consts[j]);
+                left_consts[j] = CHAR_MIN;
+            } else {
+                left_consts[j] -= right_consts[i];
+                i++;
+            }
+        }
+    }
+    return err_ok;
+}
+
+char mul_polynomial(struct polynomial* left, struct polynomial* right)
+{   // Усножение полиномовв, правосторонний прибавляется к левоторонниму изменяя его значение.
+    // Допустимо умножение одного и того же объекта. В столбик.
+
+}
+
+char div_polynomial(struct polynomial* left, struct polynomial* right, struct polynomial* remain)
+{   //  деление столбиком, возможно с отстатком.
+
+}
+
+char compare_polynomial(struct polynomial* left, struct polynomial right, enum polynomial_extra type)
+{   // Сравнение полиномов. Размеры должны совпадать. На вход тип сравнения: равно, меньше или больше.
+
 }
 
 double calculate_polynomial(struct polynomial* obj, double value)
@@ -548,13 +689,30 @@ void polynomial()
     to_string_polynomial(ptr_c, txt);
     printf("Converted string is '%s';\n", txt);
     //char input[DATA_MAX] = "Debug: [-5^3] and [3^+5], plus incorrect [2^+5).";
-    char input[DATA_MAX] = "Debug: [-5^3] and [3^+5], plus incorrect [2^+5).";
+    char input[DATA_MAX] = "Debug: [-5%2] and [3%+5], plus incorrect [2%%+5).";
     from_string_polynomial(ptr_b, input);
     print_polynomial(&poly_b, 2);
     // Чтение, запись, вывод и вычисление полинома.
-
+    char new_consts = 3;
+    print_polynomial(ptr_b, 2);
+    set_constants(ptr_b, &new_consts, 1, 1);
+    unsigned char new_exps = 2;
+    set_exponents(ptr_b, &new_exps, 1, 1);
+    print_polynomial(ptr_b, 2);
     // Все арифметические функции.
-
+    inc_polynomial(ptr_b, 1, 1, poly_con);
+    dec_polynomial(ptr_b, 1, 1, poly_exp);
+    resize_polynomial(ptr_b, 3);
+    new_consts = 5;
+    new_exps = 1;
+    set_constants(ptr_b, &new_consts, 1, 2);
+    set_exponents(ptr_b, &new_exps, 1, 2);
+    print_polynomial(ptr_b, 2);
+    print_polynomial(&poly_c, 2);
+    add_polynomial(&poly_b, &poly_c, 1);
+    print_polynomial(&poly_b, 2);
+    add_polynomial(ptr_a, ptr_b, 1);
+    print_polynomial(&poly_a, 2);
     // Функции сравнения.
 
     // Дополнительные функции полинома.
