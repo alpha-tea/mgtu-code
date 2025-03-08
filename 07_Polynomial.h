@@ -1,1 +1,6 @@
-﻿#include <stdio.h>
+﻿#ifndef POLYNOMIAL
+#define POLYNOMIAL
+
+void polynomial();
+
+#endif
