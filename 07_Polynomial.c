@@ -18,6 +18,9 @@
 // Ограничение на глобальный размер данных включая текст, необязятельно, но для учебного примера.
 #define DATA_MAX 0x100
 #define MEM_MAX 0x0400
+//  Ширирна и высота виртуального экрана для консольного рисования графиков. Если будут изменения, то заглянуть в 'print_screen'.
+#define SCR_WIDTH 0x40
+#define SCR_HEIGHT 0x20
 
 // Вспомогательное перечисление для всех частей полинома и операции сравнения.
 enum flags : unsigned short {
@@ -45,6 +48,9 @@ static const double epsilon = 0.001;    // Заданная точность и�
 static unsigned short memory = MEM_MAX;
 static char element_fmt[] = "[%C%%%E]";  // Формат элемента при преобразовании по умолчанию. | [%C^%E]
 //разделитель пробел или табуляция
+static char screen[SCR_HEIGHT][SCR_WIDTH];                      // Буффер виртуального текстового экрана.
+static const unsigned int pencil_colors = 5;                           // Всего условных цветов или градаций черного.
+static const char pencil[] = { 32, 176, 177, 178, 219 };               // Коды таблицы ASCII для рисования в буффере.
 
 unsigned short to_hw(void* ptr)
 {
@@ -397,62 +403,34 @@ short from_string_polynomial(struct polynomial* obj, char* src)
     return flag_ok;
 }
 
-enum flags inc_polynomial(struct polynomial* obj, unsigned char index, unsigned char count, enum flags parts)
+enum flags inc_dec_polynomial(struct polynomial* obj, unsigned char index, unsigned char count,
+                              short offs, enum flags parts)
 {   // Увеличение константы или экспоненты полинома по индексу. Тип увеличения по отдельности или вместе.
     if (is_correct_polynomial(obj) != flag_ok || !((parts & ply_constant) || (parts & ply_exponent))) {
-        printf("error inc: polynomial [%X] is incorrect or flags not sets;\n", to_hw(obj));
+        printf("error inc/dec: polynomial [%X] is incorrect or flags not sets;\n", to_hw(obj));
         return err_incorrect;
     }
     if (index + count > size_polynomial(obj)) {
-        printf("error inc: polynomial [%X], index %hhu, counter %hhu is out of range;\n",
+        printf("error inc/dec: polynomial [%X], index %hhu, counter %hhu is out of range;\n",
                to_hw(obj), index, count);
         return err_range;
     }
-    printf("Inc polynomial [%X] from index %hhu, counter %hhu, flags %X in hex;\n",
-           to_hw(obj), index, count, parts);
+    printf("Inc/dec polynomial [%X] from index %hhu, counter %hhu, offset %hd, flags %X in hex;\n",
+           to_hw(obj), index, count, offs, parts);
     while (count--) {
         if ((parts & ply_constant) != 0) {
             char* consts = get_constants(obj, index);
-            if (*consts == CHAR_MAX)
-                printf("warning inc polynomial: constants at %hhu overflow!;\n", index);
-            (*consts)++;
+            if ((short)(*consts) + offs > CHAR_MAX || (short)(*consts) + offs < CHAR_MIN)
+                printf("warning inc polynomial: constant at %hhu overflow %hd;\n",
+                       index, (short)(*consts) + offs);
+            (*consts) = (char)((short)(*consts) + offs);
         }
         if ((parts & ply_exponent) != 0) {
             unsigned char* exps = get_exponents(obj, index);
-            if (*exps == UCHAR_MAX)
-                printf("warning inc polynomial: exps at %hhu overflow!;\n", index);
-            (*exps)++;
-        }
-        index++;
-    }
-    return flag_ok;
-}
-
-short dec_polynomial(struct polynomial* obj, unsigned char index, unsigned char count, enum flags parts)
-{   // Уменьшение константы или экспоненты полинома по индексу. Тип уменьшения по отдельности или вместе.
-    if (is_correct_polynomial(obj) != flag_ok  || !(parts & ply_constant || parts & ply_exponent)) {
-        printf("error dec: polynomial [%X] is incorrect or flags not sets;\n", to_hw(obj));
-        return err_incorrect;
-    }
-    if (index + count > size_polynomial(obj)) {
-        printf("error dec: polynomial [%X], index %hhu, counter %hhu is out of range;\n",
-               to_hw(obj), index, count);
-        return err_range;
-    }
-    printf("Dec polynomial [%X] from index %hhu, counter %hhu, flags %X in hex;\n",
-           to_hw(obj), index, count, parts);
-    while (count--) {
-        if ((parts & ply_constant) != 0) {
-            char* consts = get_constants(obj, index);
-            if (*consts == CHAR_MIN)
-                printf("warning dec polynomial: constants at %hhu overflow!;\n", index);
-            (*consts)--;
-        }
-        if ((parts & ply_exponent) != 0) {
-            unsigned char* exps = get_exponents(obj, index);
-            if (*exps == 0)
-                printf("warning dec polynomial: exps at %hhu overflow!;\n", index);
-            (*exps)--;
+            if ((short)(*exps) + offs > UCHAR_MAX || (short)(*exps) + offs < 0)
+                printf("warning inc polynomial: exp at %hhu overflow %hd;\n",
+                       index, (short)(*exps) + offs);
+            (*exps) = (unsigned char)((short)(*exps) + offs);
         }
         index++;
     }
@@ -460,38 +438,38 @@ short dec_polynomial(struct polynomial* obj, unsigned char index, unsigned char 
 }
 
 unsigned char degree(struct polynomial* obj, enum flags type)
-{   // Вычисление степеней полинома
+{   // Вычисление степеней полинома, без учёта кратности корней.
     // ply_max - максимальная степень при x не равной нулю.
     // ply_min - минимальная степень при x не равной нулю.
     // ply_full - полная степень. Сумма всех степеней при x не равной нулю.
     if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0 ||
         !(type & ply_full || type & ply_max || type & ply_min)) {
-        printf("degree polynomial error: polynomial ot type is incorrect;\n");
+        printf("error degree: polynomial [%X] or type is incorrect;\n", to_hw(obj));
         return err_incorrect;
     }
     char* consts = get_constants(obj, 0);
     unsigned char* exps = get_exponents(obj, 0);
     unsigned char size = size_polynomial(obj);
-    unsigned char max_deg = 0, min_deg = UCHAR_MAX, sum_deg = 0, counter = 0;
-    printf("Calculating the degrees of a polynomial[%hX];", obj);
+    unsigned char max_deg = 0, min_deg = UCHAR_MAX, full_deg = 0, counter = 0;
+    printf("Degree of a polynomial [%X], flags %X in hex;", to_hw(obj), type);
     for (unsigned char i = 0; i < size; ++i)
         if (consts[i] != 0) {
             if (exps[i] < min_deg)
                 min_deg = exps[i];
             if (exps[i] > max_deg)
                 max_deg = exps[i];
-            sum_deg += exps[i];
+            full_deg += exps[i];
             counter++;
         }
-    printf("Total parameter:\n");
+    printf("Total parameter:");
     if (counter != 0) {
         if (type & ply_full)
-            printf("\tSum of degrees = %u;\n", sum_deg);
+            printf("\tfull degree %hhu;\n", full_deg);
         if (type & ply_max)
-            printf("\tMax degrees = %u;\n", max_deg);
+            printf("\tmax degree %hhu;\n", max_deg);
         if (type & ply_min)
-            printf("\tMin degrees = %u;\n", min_deg);
-        printf("\tQuantity = %u;\n", counter);
+            printf("\tmin degree %hhu;\n", min_deg);
+        printf("\tquantity %hhu;\n", counter);
     } else
         printf("No parameters with non-zero x;\n");
     return flag_ok;
@@ -529,98 +507,141 @@ unsigned char compact_polynomial(struct polynomial* obj)
     return size - compact;
 }
 
-short add_polynomial(struct polynomial* left, struct polynomial* right, char is_compact)
-{   // Сложение полиномов, правосторонний прибавляется к левостороннему, изменяя его значение.
-    // Допустимо сложение одного и того же объекта.
-    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
-        printf("add polynomial error: polynomials is incorrect;\n");
+enum flags to_monic(struct polynomial* obj, enum flags type)
+{   // Преобразование полинома к приведённому виду с потерями данных и по типу упорядочивания
+    // Флаги: more, less во возрастанию или убыванию степеней;
+    // max, min привести к наибольшей или наименьшей.
+    // Если флаги отсутствуют то оставить порядок и коэффициенты как есть.
+    // Compact вызывается всегда.
+    if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
+        printf("to monic error: polynomials [%X] is incorrect;\n", to_hw(obj));
         return err_incorrect;
     }
-    if (left != right)
-        printf("\nAdd left[%hX] and right[%hX] different polynomials;\n", left, right);
-    else
-        printf("\nAdd left[%hX] and right[%hX] same polynomials;\n", left, right);
+    printf("Converting a polynomial [%X] to monic: ", to_hw(obj));
+    char* consts = get_constants(obj, 0);
+    unsigned char* exps = get_exponents(obj, 0);
+    unsigned char size = size_polynomial(obj);
+    for (unsigned char i = 0; i < size - 1; ++i) {
+        printf("%+hhd( ", consts[i]);
+        for (unsigned char j = i + 1; j < size && consts[i] != 0; ++j)
+            if (exps[i] == exps[j] && consts[j] != 0) {
+                if (((short)consts[i] + (short)consts[j]) > CHAR_MAX
+                    || ((short)consts[i] + (short)consts[j]) < CHAR_MIN)
+                    printf("\twarning: merge constants is out of range\t");
+                consts[i] += consts[j];
+                printf("%+hhd ", consts[j]);
+                consts[j] = 0;
+            }
+        printf(") ");
+    }
+    printf("\n");
+    print_polynomial(obj, 1);
+    size = compact_polynomial(obj);
+    if (size > 0) {
+        if ((type & ply_less) || (type & ply_more)) {
+            print_polynomial(obj, 0);
+            printf(", linear sort as flags\n");
+            unsigned char i = 0, j = 0, idx_max = 0;
+            for (i = 0, idx_max = 0; i < size - 1; idx_max = ++i) {
+                for (j = i + 1; j < size; ++j)
+                    if (((type & ply_more) && exps[j] > exps[idx_max])
+                        || ((type & ply_less) && exps[j] < exps[idx_max]))
+                        idx_max = j;
+                if (idx_max != i) {
+                    unsigned char tmp_exp = exps[idx_max];
+                    char tmp_const = consts[idx_max];
+                    exps[idx_max] = exps[i];
+                    consts[idx_max] = consts[i];
+                    exps[i] = tmp_exp;
+                    consts[i] = tmp_const;
+                }
+            }
+            print_polynomial(obj, 1);
+        }
+        if ((type & ply_min) || (type & ply_max)) {
+            unsigned char i = 0, j = 0;
+            for (i = 0, j = 0; i < size; ++i)
+                if (((type & ply_min) && exps[i] < exps[j])
+                    || ((type & ply_max) && exps[i] > exps[j]))
+                    j = i;
+            printf("min or max exponent at [%hhu], divider is %hhd and compact: ", j, consts[j]);
+            char k = consts[j];
+            if (k != 0) {
+                for (i = 0; i < size; ++i)
+                    consts[i] /= k;
+                printf("\n");
+                print_polynomial(obj, 1);
+                compact_polynomial(obj);
+            } else
+                printf("warning divider is zero, polynomial as is;\n");
+        }
+    }
+    return flag_ok;
+}
+
+enum flags add_polynomial(struct polynomial* left, struct polynomial* right, enum flags monic)
+{   // Сложение полиномов, правосторонний прибавляется к левостороннему, нули автоматически удалаются.
+    // Допустимо сложение одного и того же объекта.
+    // Дополнительный флаг - приведение к каноническому виду.
+    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
+        printf("error add: polynomials left [%X] and right [%X] is incorrect;\n",
+               to_hw(left), to_hw(right));
+        return err_incorrect;
+    }
+    printf("Add left [%X] and right [%X] polynomials, flags %X in hex;\n",
+           to_hw(left), to_hw(right), monic);
     print_polynomial(left, 1);
     print_polynomial(right, 1);
     unsigned char left_size = size_polynomial(left);
     unsigned char right_size = size_polynomial(right);
+    if ((short)left_size + (short)right_size > UCHAR_MAX) {
+        printf("error add: sizes left %hhu and right %hhu is out of range;\n", left_size, right_size);
+        return err_range;
+    }
     if (right_size == 0) {
         printf("Right polynomial is empty, nothing add to left;\n");
         return flag_ok;
     }
-    char consts[DATA_MAX], is_found[DATA_MAX];
-    unsigned char exps[DATA_MAX], founded = 0;
-    for (short i = 0; i < DATA_MAX; ++i)
-        consts[i] = is_found[i] = 0;
-    unsigned char i, j;
-    for (i = 0; i < left_size; i++) {
-        char *left_consts = get_constants(left, i);
-        unsigned char *left_exps = get_exponents(left, i), *right_exps;
-        if (left != right) {
-            consts[i] = *left_consts;
-            exps[i] = *left_exps;
-            for (j = 0; j < right_size; ++j) {
-                right_exps = get_exponents(right, j);
-                if (*left_exps == *right_exps && !is_found[j]) {
-                    consts[i] += *get_constants(right, j);
-                    is_found[j] = 1;
-                    founded++;
-                }
-            }
-        } else {
-            consts[i] = *left_consts << 1;
-            exps[i] = *left_exps;
-            is_found[i] = 1;
-            founded++;
-        }
-    }
-    printf("Add %hhu byte elements from left and founded %hhu equal exponents from right;\n",
-           i, founded);
-    for (j = 0; j < right_size; ++j)
-        if (is_found[j] == 0) {
-            consts[i] = *get_constants(right, j);
-            exps[i] = *get_exponents(right, j);
-            i++;
-        }
-    printf("Size of new polynomail is %hhu, ", i);
     if (left_size == 0) {
-        printf("left destination is empty, just create new;\n");
-        create_polynomial(left, i, consts, exps, 0);
-    } else {
-        printf("left destination size is %hhu, ", left_size);
-        if (i > left_size) {
-            printf("resize and set data;\n");
-            char err = resize_polynomial(left, i);
-            if (err != flag_ok) {
-                printf("add polynomial: resize left polynomial error!;\n");
-                return err_memory;
-            }
-        } else
-            printf("size is equal, just set data;\n");
-        set_constants(left, consts, i, 0);
-        set_exponents(left, exps, i, 0);
+        printf("Left polynomial is empty, just move function right to left;\n");
+        return move_polynomial(&left, &right);      // проверить
     }
-    if (is_compact)
-        compact_polynomial(left);
+    resize_polynomial(left, left_size + right_size);
+    unsigned char* r_exps = get_exponents(right, 0);
+    char* r_consts = get_constants(right, 0);
+    set_constants(left, r_consts, right_size, left_size);
+    set_exponents(left, r_exps, right_size, left_size);
+    printf("\n");
+    print_polynomial(left, 2);
+    to_monic(left, monic);
     return flag_ok;
 }
 
-//Вещание
-
-short sub_polynomial(struct polynomial* left, struct polynomial* right)
+enum flags sub_polynomial(struct polynomial* left, struct polynomial* right, enum flags monic)
 {   // Умножить константы правого на -1 и сложить. Правый сохранить как было.
-    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {  // А если left == right?
-        printf("sub polynomial error: polynomials is incorrect;\n");
+    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
+        printf("error sub: polynomials left [%X] and right [%X] is incorrect;\n",
+               to_hw(left), to_hw(right));
         return err_incorrect;
     }
-    printf("\nSub left[%hX] and right[%hX] polynomials;\n", left, right);
+    if (left == right) {
+        printf("Sub polynomials left [%X] and right [%X] are same, destroy left polynomials;\n",
+               to_hw(left), to_hw(right));
+        return destroy_polynomial(left);
+    }
     unsigned char r_size = size_polynomial(right);
+    if (r_size == 0) {
+        printf("right polynomial is empty, nothing to sub;\n");
+        return flag_ok;
+    }
+    printf("Sub left [%X] and right [%X], negative ", to_hw(left), to_hw(right));
     struct polynomial neg_right = {.constants = NULL, .exponents = NULL, .size = 0};
     copy_polynomial(&neg_right, right);
+    printf("[%X];\n", to_hw(&neg_right));
     char* consts = get_constants(&neg_right, 0);
     for (unsigned char i = 0; i < r_size; ++i)
         consts[i] *= -1;
-    add_polynomial(left, &neg_right, 0);
+    add_polynomial(left, &neg_right, monic);
     return flag_ok;
 }
 
@@ -689,143 +710,88 @@ char div_polynomial(struct polynomial* left, struct polynomial* right, struct po
 
 }
 
-enum flags to_monic(struct polynomial* obj, enum flags type)
-{   // Преобразование полинома к приведённому виду с потерями данных и по типу упорядочивания
-    // Флаги: more, less во возрастанию или убыванию степеней;
-    // max, min привести к наибольшей или наименьшей.
-    // Если флаги отсутствуют то оставить порядок и коэффициенты как есть.
-    // Compact вызывается всегда.
+double calculate_polynomial(struct polynomial* obj, double value)
+{   // Вычисление полинома, по заданному значению. Пока что полином целиком.
+    double result = NAN;
     if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
-        printf("to monic error: polynomials [%X] is incorrect;\n", to_hw(obj));
-        return err_incorrect;
+        printf("error calculate: polynomials [%X] is incorrect or empty;\n", to_hw(obj));
+        return result;
     }
-    printf("Converting a polynomial [%X] to monic: ", to_hw(obj));
+    printf("Calculate of polynomial [%X] value for X = %.2f(const, element, result): ",
+           to_hw(obj), value);
     char* consts = get_constants(obj, 0);
     unsigned char* exps = get_exponents(obj, 0);
     unsigned char size = size_polynomial(obj);
-    for (unsigned char i = 0; i < size - 1; ++i) {
-        printf("%+hhd( ", consts[i]);
-        for (unsigned char j = i + 1; j < size && consts[i] != 0; ++j)
-            if (exps[i] == exps[j] && consts[j] != 0) {
-                if (((short)consts[i] + (short)consts[j]) > CHAR_MAX
-                    || ((short)consts[i] + (short)consts[j]) < CHAR_MIN)
-                    printf("\twarning: merge constants is out of range\t");
-                consts[i] += consts[j];
-                printf("%+hhd ", consts[j]);
-                consts[j] = 0;
-            }
-        printf(") ");
+    result = 0.0;
+    for (unsigned char i = 0; i < size; ++i) {
+        result += (double)consts[i] * pow(value, (double)exps[i]);
+        printf("(%.2f, %.2f, %.2f) ", (double)consts[i], pow(value, (double)exps[i]), result);
     }
     printf("\n");
-    print_polynomial(obj, 0);
-    size = compact_polynomial(obj);
-    if (size > 0) {
-        print_polynomial(obj, 0);
-        printf(", linear sort as flags");
-        if ((type & ply_less) || (type & ply_more)) {
-            unsigned char i = 0, j = 0, idx_max = 0;
-            for (i = 0, idx_max = 0; i < size - 1; idx_max = ++i) {
-                for (j = i + 1; j < size; ++j)
-                    if (((type & ply_more) && exps[j] > exps[idx_max])
-                        || ((type & ply_less) && exps[j] < exps[idx_max]))
-                        idx_max = j;
-                if (idx_max != i) {
-                    unsigned char tmp_exp = exps[idx_max];
-                    char tmp_const = consts[idx_max];
-                    exps[idx_max] = exps[i];
-                    consts[idx_max] = consts[i];
-                    exps[i] = tmp_exp;
-                    consts[i] = tmp_const;
-                }
-            }
-            print_polynomial(obj, 1);
-        }
-        if ((type & ply_min) || (type & ply_max)) {
-            unsigned char i = 0, j = 0;
-            for (i = 0, j = 0; i < size; ++i)
-                if (((type & ply_min) && exps[i] < exps[j])
-                    || ((type & ply_max) && exps[i] > exps[j]))
-                    j = i;
-            printf("min or max exponent at [%hhu], divider is %hhd and compact: ", j, consts[j]);
-            char k = consts[j];
-            if (k != 0) {
-                for (i = 0; i < size; ++i)
-                    consts[i] /= k;
-                printf("\n");
-                print_polynomial(obj, 1);
-                compact_polynomial(obj);
-            } else
-                printf("warning divider is zero, polynomial as is;\n");
-        }
-    }
-    return flag_ok;
-}
-
-double calculate_polynomial(struct polynomial* obj, double value)
-{   // Вычисление полинома, обычное целое число. Пока что полином целиком.
-    if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
-        printf("calculate polynomial error: polynomials is incorrect;\n");
-        return err_incorrect;
-    }
-    printf("Calculate of polynomial[%hX] value for X = %.2f;\n", obj, value);
-    char* consts = get_constants(obj, 0);
-    unsigned char* exps = get_exponents(obj, 0);
-    unsigned char size = size_polynomial(obj);
-    double total = 0;
-    for (unsigned char i = 0; i < size; ++i) {
-        //printf("%.2f, %.2f, %.2f\n", (double)consts[i], pow(value, (double)exps[i]), total);
-        total += (double)consts[i] * pow(value, (double)exps[i]);
-    }
-    printf("Calculated polynomial value = %.2f\n\n", total);
-    return total;
+    return result;
 }
 
 enum flags compare_polynomial(struct polynomial* left, struct polynomial* right)
-{   // Сравнение полиномов. Размеры должны совпадать. На вход тип сравнения: равно, меньше или больше.
-    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok ||
-        type < ply_equal || type > ply_more) {
-        printf("compare polynomial error: polynomials or type is incorrect;\n");
+{   // Сравнение полиномов. Размеры должны совпадать. Сравниваются только константы при равных степенях.
+    // Не является математически верным решением.
+    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
+        printf("Error compare: polynomials left [%X] or right [%X] is incorrect;\n",
+               to_hw(left), to_hw(right));
         return err_incorrect;
     }
-    printf("Comparison of polynomials[%hX] and [%hX];\n", left, right);
+    printf("Compare of polynomials left [%X] and right [%X]\n", to_hw(left), to_hw(right));
     struct polynomial monic_right = {.constants = NULL, .exponents = NULL, .size = 0};
     struct polynomial monic_left = {.constants = NULL, .exponents = NULL, .size = 0};
     copy_polynomial(&monic_right, right);
     copy_polynomial(&monic_left, left);
-    to_monic(&monic_right);
-    to_monic(&monic_left);
+    to_monic(&monic_right, ply_more);
+    to_monic(&monic_left, ply_more);
     unsigned char l_size = size_polynomial(&monic_left);
     unsigned char r_size = size_polynomial(&monic_right);
-    unsigned char size = l_size;
-    if (size < r_size)
-        size = r_size;
+    printf("\nLeft (%hhu) and right (%hhu) sizes converting into monic:\n", l_size, r_size);
+    print_polynomial(&monic_left, 1);
+    print_polynomial(&monic_right, 1);
+    if (l_size == 0 && r_size == 0) {
+        printf("warning compare: both polynomials are nulls, so they equal;\n");
+        return ply_equal;
+    }
+    if (l_size != r_size) {
+        printf("error compare: polynomials of different sizes (%hhu:%hhu), comparison is impossible;\n",
+               l_size, r_size);
+        return err_compare;
+    }
     char* l_consts = get_constants(&monic_left, 0);
     unsigned char* l_exps = get_exponents(&monic_left, 0);
     char* r_consts = get_constants(&monic_right, 0);
     unsigned char* r_exps = get_exponents(&monic_right, 0);
-    for (unsigned i = 0; i < size; ++i) {
-        if (i >= l_size) {
-            if (r_consts[i] > 0)
-                return -1;
-            else
-                return 1;
-        }
-        if (i >= r_size) {
-            if (l_consts[i] > 0)
-                return 1;
-            else
-                return -1;
-        }
-        if (l_exps[i] == r_exps[i]) {
-            if (l_consts[i] > r_consts[i])
-                return 1;
-            else if (l_consts[i] < r_consts[i])
-                return -1;
-        } else if (l_exps[i] > r_exps[i])
-            return 1;
-        else if (l_exps[i] < r_exps[i])
-            return -1;
+    unsigned char more = 0, less = 0, equal = 0, i = 0;
+    for (i = 0; i < l_size && l_exps[i] == r_exps[i]; ++i) {
+        if (l_consts[i] == r_consts[i])
+            equal++;
+        if (l_consts[i] > r_consts[i])
+            more++;
+        if (l_consts[i] < r_consts[i])
+            less++;
+        //printf("le: %hhu, re: %hhu;\n",l_exps[i + 1], r_exps[i + 1]);
     }
+    //printf("i = %hhu, %hhu;\n", i, l_size);
+    if (i == l_size) {
+        printf("more %hu, less %hu, equal %hu;\n", more, less, equal);
+        if (equal == i) {
+            printf("The left and right polynomial are equal;\n");
+            return ply_equal;
+        }
+        if (more == i) {
+            printf("The left polynomial is more than the right polynomial;\n");
+            return ply_more;
+        }
+        if (less == i) {
+            printf("The left polynomial is less than the right polynomial;\n");
+            return ply_less;
+        }
+    }
+    printf("warning compare, not comparable, exponents not equal;\n");
+    return err_compare;
 }
 
 short resolve(struct polynomial* obj, double solutions[], double left, double right)
@@ -887,9 +853,36 @@ short derivative(struct polynomial* obj)
     return flag_ok;
 }
 
-char draw_polynomial(struct polynomial left, double scale_x, double scale_y)
-{
+void clear_screen_ply(char c, int is_debug)
+{   // Функция очистки буфера виртуального экрана заданным символом. Циклами или через адрес по вкусу.
+    // Если флаг отладки, то заполнить буфер всеми "цветами", кроме 0-го. Можно по классике, прямоугольниками.
+    if (is_debug)
+        for (unsigned int i = 0, k = 1; i < SCR_HEIGHT; ++i)
+            for (unsigned int j = 0; j < SCR_WIDTH; ++j)
+                screen[i][j] = pencil[k + j / ((SCR_WIDTH / (pencil_colors - 1)))];
+    else
+        for (unsigned int i = 0; i < SCR_HEIGHT; ++i)
+            for (unsigned int j = 0; j < SCR_WIDTH; ++j)
+                screen[i][j] = c;
+}
 
+void print_screen_ply(void)
+{   // Функция вывода буфера в консоль. Переход на следующую строку после экрана.
+    //for (unsigned int i = 0; i < SCR_HEIGHT; ++i)               // Быстрый вывод через форматированную строку,
+     //   printf("%.128s\n", screen[i]);                          //но требуется ручная подстановка параметра поля строки.
+
+    for (unsigned int i = 0; i < SCR_HEIGHT; ++i) {
+        for (unsigned int j = 0; j < SCR_WIDTH; ++j)
+                putchar(screen[i][j]);                        // Более медленный но также рабочий вывод.
+        printf("\n");                                           // Раскоментировать, если требуется менять постоянно ширину.
+    }
+
+}
+
+enum flags draw_polynomial(struct polynomial* obj, double l_x, double r_x)
+{   // рисование полинома в виртуальный экран на заданном интервале, масштаб по Y автоматом.
+    // Шаг локальный, чтобы график был плотный. (
+   // struct
 }
 
 void polynomial()
@@ -965,33 +958,61 @@ void polynomial()
 
     // Все арифметические функции, приведение и сравнение.
     printf("\n\nArithmetic operators to monic polynomial and compare;\n\n\n");
-    /*
-    print_polynomial(ptr_b, 2);
-    inc_polynomial(ptr_b, 1, 1, ply_constant);
-    print_polynomial(ptr_b, 2);
-    dec_polynomial(ptr_b, 1, 1, ply_exponent);
-    print_polynomial(ptr_b, 2);
-    */
-    char data_consts_b[] = {1, -2, -3, 3, -1};
-    unsigned char data_exps_b[] = {1, 0, 2, 2, 1};
+    char data_consts_b[] = {2, -1, -2, 5, 0};
+    unsigned char data_exps_b[] = {2, 1, 3, 3, 2};
     create_polynomial(ptr_a, 5, data_consts_b, data_exps_b, ply_nop);
     print_polynomial(ptr_a, 2);
-    to_monic(ptr_a, ply_more | ply_min);  // nop more (min max)
+    inc_dec_polynomial(ptr_a, 0, size_polynomial(ptr_a), -1, ply_constant | ply_exponent);
     print_polynomial(ptr_a, 2);
-    return;
-    resize_polynomial(ptr_b, 3);
-    new_consts = 5;
-    new_exps = 1;
-    set_constants(ptr_b, &new_consts, 1, 2);
-    set_exponents(ptr_b, &new_exps, 1, 2);
-    print_polynomial(ptr_b, 2);
+    to_monic(ptr_a, ply_more);  // nop more (min max)
+    printf("\nCompare different polymonials include self compare;\n\n");
+    enum flags result;
+    char data_consts_c[] = {5, -7, 8, -6};
+    unsigned char data_exps_c[] = {5, 3, 5, 3};
+    resize_polynomial(ptr_a, 2);
+    resize_polynomial(ptr_c, 2);
+    set_constants(ptr_a, &data_consts_c[2], 2, 0);
+    set_exponents(ptr_a, &data_exps_c[2], 2, 0);
+    set_constants(ptr_c, data_consts_c, 2, 0);
+    set_exponents(ptr_c, data_exps_c, 2, 0);
+    //print_polynomial(ptr_a, 2);
+    //print_polynomial(ptr_b, 2);
+    //print_polynomial(ptr_c, 2);
+    result = compare_polynomial(ptr_b, ptr_a);
+    printf("result of not comparable in hex %X as flags;\n\n", result);
+    result = compare_polynomial(ptr_a, ptr_c);
+    printf("result of more in hex %X as flags;\n\n", result);
+    result = compare_polynomial(ptr_b, ptr_b);
+    printf("result of self compare in hex %X as flags;\n\n", result);
+    printf("\nAddition and substraction;\n\n");
+    resize_polynomial(ptr_a, 5);
+    resize_polynomial(ptr_b, 4);
+    destroy_polynomial(ptr_c);
+    set_constants(ptr_a, data_consts_b, 5, 0);
+    set_exponents(ptr_a, data_exps_b, 5, 0);
+    set_constants(ptr_b, data_consts_c, 4, 0);
+    set_exponents(ptr_b, data_exps_c, 4, 0);
+    printf("\n");
+    add_polynomial(ptr_a, ptr_b, ply_more);
+    print_polynomial(ptr_a, 2);
+    add_polynomial(ptr_c, ptr_b, ply_nop);
     print_polynomial(ptr_c, 2);
-
-    add_polynomial(ptr_b, ptr_c, 1);
+    sub_polynomial(ptr_a, ptr_c, ply_nop);
+    print_polynomial(ptr_a, 2);
+    sub_polynomial(ptr_a, ptr_a, ply_nop);
+    print_polynomial(ptr_a, 2);
+    print_polynomial(ptr_c, 2);
+    degree(ptr_c, ply_min);
+    degree(ptr_c, ply_max);
+    degree(ptr_c, ply_full);
+    calculate_polynomial(ptr_c, 1.0);
+    clear_screen_ply(' ', 1);
+    print_screen_ply();
+    return;
     print_polynomial(ptr_b, 2);
     add_polynomial(ptr_a, ptr_b, 1);
     print_polynomial(ptr_a, 2);
-    derivative(ptr_a);
+    //derivative(ptr_a);            ?? для построения графиков
     mul_polynomial(ptr_a, ptr_a);
     print_polynomial(ptr_a, 2);
 
@@ -999,7 +1020,7 @@ void polynomial()
     //to_monic(ptr_a);
     print_polynomial(ptr_a, 2);
     print_polynomial(ptr_c, 2);
-    compare_polynomial(ptr_a, ptr_c, ply_less);
+    compare_polynomial(ptr_a, ptr_c);
     /*
     const char data_size = 2;
     char data_consts[] = {3, -1, 0, 0, -6};
