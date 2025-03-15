@@ -1,6 +1,7 @@
 ﻿#include "07_Polynomial.h"
 #include <ctype.h>
 #include <math.h>
+#include <float.h>
 #include <stdio.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -19,7 +20,7 @@
 #define DATA_MAX 0x100
 #define MEM_MAX 0x0400
 //  Ширирна и высота виртуального экрана для консольного рисования графиков. Если будут изменения, то заглянуть в 'print_screen'.
-#define SCR_WIDTH 0x40
+#define SCR_WIDTH 0x20
 #define SCR_HEIGHT 0x20
 
 // Вспомогательное перечисление для всех частей полинома и операции сравнения.
@@ -28,7 +29,7 @@ enum flags : unsigned short {
     err_compare = 0x0005,
     ply_constant = 0x0008, ply_exponent = 0x0010, ply_equal = 0x0020,
     ply_less = 0x0040, ply_more = 0x0080, ply_full = 0x0100, ply_max = 0x0200, ply_min = 0x0400,
-    ply_rand = 0x0800, ply_compact = 0x1000
+    ply_rand = 0x0800, ply_compact = 0x1000, ply_debug = 0x2000
 };
 
 struct polynomial {                                         // Структура полинома с одной переменной.
@@ -625,7 +626,7 @@ enum flags sub_polynomial(struct polynomial* left, struct polynomial* right, enu
         return err_incorrect;
     }
     if (left == right) {
-        printf("Sub polynomials left [%X] and right [%X] are same, destroy left polynomials;\n",
+        printf("Sub polynomials left [%X] and right [%X] are same, destroy left polynomial;\n",
                to_hw(left), to_hw(right));
         return destroy_polynomial(left);
     }
@@ -645,46 +646,102 @@ enum flags sub_polynomial(struct polynomial* left, struct polynomial* right, enu
     return flag_ok;
 }
 
-void print_for_mul(struct polynomial* obj)
-{
-    char* consts_ptr = get_constants(obj, 0);
-    unsigned char* exps_ptr = get_exponents(obj, 0);
-    unsigned char poly_size = size_polynomial(obj);
-    for (unsigned char i = 0; i < poly_size; ++i)
-        printf("%+hhd*(X)^%hhu ", consts_ptr[i], exps_ptr[i]);
-    printf("\n");
-}
-
 char mul_polynomial(struct polynomial* left, struct polynomial* right)
 {   // Умножение полиномов, правосторонний прибавляется к левостороннему изменяя его значение.
-    // Допустимо умножение одного и того же объекта. В столбик.
-    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok || size_polynomial(left) == 0) {
-        printf("Mul polynomial error: polynomials is incorrect;\n");
+    // Допустимо умножение одного и того же объекта.
+    /*
+    Есть второй вариант решения где не будет такого сильного ограничения по размерам,
+    но там придётся мудрить.
+    В нём to_monic буду вызывать после кажного вложенного цикла
+    for (j = 0; j < left_size; ++j, ++left_mul_counter)
+     */
+    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
+        printf("error mul: polynomials left [%X] or right [%X] is incorrect;\n",
+               to_hw(left), to_hw(right));
         return err_incorrect;
     }
-    if (left != right)
-        printf("\nMultiplication left[%hX] and right[%hX] different polynomials;\n", left, right);
-    else
-        printf("\nMultiplication left[%hX] and right[%hX] same polynomials;\n", left, right);
+    printf("Multiplication left [%X] and right [%X] same polynomials;\n", to_hw(left), to_hw(right));
+    struct polynomial left_mul = {.size = 0, .constants = NULL, .exponents = NULL};
+    struct polynomial right_mul = {.size = 0, .constants = NULL, .exponents = NULL};
+    print_polynomial(left, 1);
+    print_polynomial(right, 1);
+    copy_polynomial(&left_mul, left);
+    copy_polynomial(&right_mul, right);
+    //to_monic(&left_mul, ply_more);
+    //to_monic(&right_mul, ply_more);
+    unsigned char l_size = size_polynomial(&left_mul);
+    unsigned char r_size = size_polynomial(&right_mul);
+    if ((short)l_size * (short)r_size > UCHAR_MAX) {
+        printf("error mul: sizes left %hhu and right %hhu is out of range;\n", l_size, r_size);
+        destroy_polynomial(&left_mul);
+        destroy_polynomial(&right_mul);
+        return err_range;
+    }
+    if (r_size > 0 && l_size > 0) {
+        printf("Polynomials has elements, multiply elements to new size %hhu;\n", l_size * r_size);
+        struct polynomial res_mul = {.size = 0, .constants = NULL, .exponents = NULL};
+        struct polynomial* res_ptr = &res_mul;
+        enum flags rf = create_polynomial(&res_mul, l_size * r_size, NULL, NULL, ply_rand);
+        if (rf != flag_ok) {
+            printf("error mul: error creating temporary polynomial;\n");
+            return rf;
+        }
+        unsigned char i, j, k = 0;
+        char *right_consts = get_constants(right, 0);
+        unsigned char *right_exps = get_exponents(right, 0);
+        char *left_consts = get_constants(left, 0);
+        unsigned char *left_exps = get_exponents(left, 0);
+        printf("result polynomial: ");
+        for (i = 0, k = 0; i < r_size; ++i)
+            for (j = 0; j < l_size; ++j, ++k) {
+                if ((short)(left_consts[i]) * (short)(right_consts[i]) > CHAR_MAX ||
+                    (short)(left_consts[i]) * (short)(right_consts[i]) < CHAR_MIN)
+                        printf("warning: multiply constant at [%hhu] is out of range;\n", i);
+                char res_consts = left_consts[j] * right_consts[i];
+                set_constants(&res_mul, &res_consts, 1, k);
+                if ((short)(left_exps[i]) + (short)(right_consts[i]) > UCHAR_MAX)
+                    printf("warning: multiply constant at [%hhu] is out of range;\n", i);
+                unsigned char res_exps = left_exps[j] + right_exps[i];
+                set_exponents(&res_mul, &res_exps, 1, k);
+            }
+        print_polynomial(&res_mul, 2);
+        destroy_polynomial(left);
+        move_polynomial(&left, &res_ptr);
+    } else {
+        printf("Mul polynomials right [%X] is empty, destroy left polynomial;\n", to_hw(right));
+        destroy_polynomial(left);
+    }
+    //to_monic(&left_mul, ply_more);
+    destroy_polynomial(&left_mul);
+    destroy_polynomial(&right_mul);
+    return flag_ok;
+}
+
+/*
+ * char mul_polynomial(struct polynomial* left, struct polynomial* right)
+{   // Умножение полиномов, правосторонний прибавляется к левостороннему изменяя его значение.
+    // Допустимо умножение одного и того же объекта. В столбик.
+    if (is_correct_polynomial(left) != flag_ok || is_correct_polynomial(right) != flag_ok) {
+        printf("error mul: polynomials left [%X] or right [%X] is incorrect;\n", to_hw(left), to_hw(right));
+        return err_incorrect;
+    }
+    printf("\nMultiplication left[%X] and right[%X] same polynomials;\n", to_hw(left), to_hw(right));
     unsigned char left_size = size_polynomial(left);
     unsigned char right_size = size_polynomial(right);
-    print_for_mul(left);
-    print_for_mul(right);
-    printf("\n");
     if (right_size == 0) {
-        printf("Right polynomial is empty, nothing mul to left;\n");
-        return flag_ok;
+        printf("Mul polynomials right [%X] is empty, destroy left polynomial;\n", to_hw(right));
+        return destroy_polynomial(left);
     }
-    struct polynomial left_mul = {.size = 0}; // для промежуточных вычислений
+    struct polynomial left_mul = {.size = 0};
     copy_polynomial(&left_mul, left);
     struct polynomial right_mul = {.size = 0};
     copy_polynomial(&right_mul, right);
     unsigned char i, j;
-    char *right_consts = get_constants(&right_mul, 0);          // для умножения самого на себя
+    char *right_consts = get_constants(&right_mul, 0);
     unsigned char *right_exps = get_exponents(&right_mul, 0);
     char *left_consts = get_constants(left, 0);
     unsigned char *left_exps = get_exponents(left, 0);
-    for (i = 0; i < left_size; ++i) {           // первое умножение сразу в left, дальше с помощью left_mul
+    for (i = 0; i < left_size; ++i) {
         left_consts[i] *= right_consts[0];
         left_exps[i] += right_exps[0];
     }
@@ -697,20 +754,21 @@ char mul_polynomial(struct polynomial* left, struct polynomial* right)
             tmp_consts[i] *= right_consts[j];
             tmp_exps[i] += right_exps[j];
         }
-        add_polynomial(left, &tmp, 0);
+        add_polynomial(left, &tmp, ply_more);
         destroy_polynomial(&tmp);
     }
     destroy_polynomial(&left_mul);
     destroy_polynomial(&right_mul);
     return flag_ok;
 }
+ */
 
 char div_polynomial(struct polynomial* left, struct polynomial* right, struct polynomial* remain)
 {   // деление столбиком, возможно с отстатком.
 
 }
 
-double calculate_polynomial(struct polynomial* obj, double value)
+double calculate_polynomial(struct polynomial* obj, double value, enum flags is_debug)
 {   // Вычисление полинома, по заданному значению. Пока что полином целиком.
     double result = NAN;
     if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
@@ -725,9 +783,10 @@ double calculate_polynomial(struct polynomial* obj, double value)
     result = 0.0;
     for (unsigned char i = 0; i < size; ++i) {
         result += (double)consts[i] * pow(value, (double)exps[i]);
-        printf("(%.2f, %.2f, %.2f) ", (double)consts[i], pow(value, (double)exps[i]), result);
+        if (is_debug & ply_debug)
+            printf("(%.2f, %.2f, %.2f) ", (double)consts[i], pow(value, (double)exps[i]), result);
     }
-    printf("\n");
+    printf("%.2f\n", result);
     return result;
 }
 
@@ -794,22 +853,22 @@ enum flags compare_polynomial(struct polynomial* left, struct polynomial* right)
     return err_compare;
 }
 
-short resolve(struct polynomial* obj, double solutions[], double left, double right)
+/*
+enum flags resolve(struct polynomial* obj, double solutions[], double left, double right)
 {   // Решение полинома методом деления пополам на заданном интервале.
     if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) < 1
-        || ((right - left) > 0.00000001)) {
-        printf("resolve polynomial error: polynomials or left or right is incorrect;\n");
+        || ((right - left) > epsilon)) {
+        printf("error resolve: polynomial [%X] or left (%.2f) or right (%.2f) is incorrect;\n",
+               to_hw(obj), left, right);
         return err_incorrect;
     }
-    const double epsilon = 0.001;
-    const double cmp_epsilon = 0.00000001;
     unsigned char sol_count = 0;
-    double left_val = calculate_polynomial(obj, left);
+    double left_val = calculate_polynomial(obj, left, );
     double right_val = calculate_polynomial(obj, right);
-    printf("Resolve polynomial[%hX], left = %.2f, right = %.2f;\n", obj, left, right);
-    if (left_val < cmp_epsilon)
+    printf("Resolve polynomial [%X], left = %.2f, right = %.2f;\n", to_hw(obj), left, right);
+    if (left_val < epsilon)
         solutions[sol_count++] = left;
-    if (right_val < cmp_epsilon)
+    if (right_val < epsilon)
         solutions[sol_count++] = right;
     if (left_val * right_val > 0) {
         printf("There are no roots in a given interval;\n");
@@ -819,10 +878,10 @@ short resolve(struct polynomial* obj, double solutions[], double left, double ri
     while ((right - left) >= epsilon) {
         middle = (left + right) / 2.0;
         double mid_val = calculate_polynomial(obj, middle);
-        if (mid_val < cmp_epsilon) {
+        if (mid_val < epsilon) {
             solutions[sol_count++] = middle;
             break;
-        } else if (mid_val * left_val < cmp_epsilon)
+        } else if (mid_val * left_val < epsilon)
             right = middle;
         else
             left = middle;
@@ -830,26 +889,29 @@ short resolve(struct polynomial* obj, double solutions[], double left, double ri
     solutions[sol_count++] = middle;
     return flag_ok;
 }
+*/
 
-short derivative(struct polynomial* obj)
-{   // производная от полинома
+enum flags derivative(struct polynomial* obj, enum flags monic)
+{   // производная от полинома, сохранение в тот же самый объект
     if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
-        printf("\nDerivative polynomial error: polynomials is incorrect;\n");
+        printf("\nerror derivative: polynomial [%X] is incorrect;\n", to_hw(obj));
         return err_incorrect;
     }
-    print_polynomial(obj, 1);
-    printf("\nDerivative of a polynomial[%hX]: ", obj);
+    //print_polynomial(obj, 1);
+    printf("Derivative of a polynomial [%X]\n", to_hw(obj));
     char* consts = get_constants(obj, 0);
     unsigned char* exps = get_exponents(obj, 0);
     unsigned char size = size_polynomial(obj);
-    for (unsigned char i = 0; i < size; ++i)
-        if (exps[i] == 0)
-            printf("+0 ");
-        else if (exps[i] == 1)
-            printf("%+hhd ", consts[i]);
-        else
-            printf("%+d*(X)^%u ", consts[i] * exps[i], exps[i] - 1);
-    printf("\n");
+    for (unsigned char i = 0; i < size; ++i) {
+        if ((short)(consts[i]) * (short)(exps[i]) > CHAR_MAX ||
+            (short)(consts[i]) * (short)(exps[i])  < CHAR_MIN)
+            printf("warning: derivative constant at [%hhu] is out of range;\n", i);
+        consts[i] *= exps[i];
+        if (exps[i] > 0)
+            exps[i]--;
+    }
+    print_polynomial(obj, 1);
+    to_monic(obj, monic);
     return flag_ok;
 }
 
@@ -879,10 +941,143 @@ void print_screen_ply(void)
 
 }
 
-enum flags draw_polynomial(struct polynomial* obj, double l_x, double r_x)
+short is_homogeneous(struct polynomial* obj)
+{   // проверка на однородность степеней полинома.
+    if (is_correct_polynomial(obj) != flag_ok || size_polynomial(obj) == 0) {
+        printf("error homogeneous: polynomial [%X] is incorrect or empty;\n", to_hw(obj));
+        return -1;
+    }
+    printf("Checking homogeneity of a polynomial [%X];\n", to_hw(obj));
+    unsigned char* exps = get_exponents(obj, 0);
+    unsigned char obj_size = size_polynomial(obj), i = 0;
+    while (obj_size && exps[i] == *exps)
+        ++i;
+    if (i == obj_size) {
+        printf("The polynomial is homogeneous;\n");
+        return 1;
+    } else {
+        printf("The polynomial isn't homogeneous;\n");
+        return 0;
+    }
+}
+
+enum flags draw_polynomial(struct polynomial* obj, double lx, double rx)
 {   // рисование полинома в виртуальный экран на заданном интервале, масштаб по Y автоматом.
-    // Шаг локальный, чтобы график был плотный. (
-   // struct
+    // Шаг локальный, чтобы график был плотный.
+    /* Вариант решения
+    1) масштабирование по X: разница (модулей r_x (макс) и l_x (мин) / (кол-во позиций - 1)). Первый элемент l_x, последний r_x
+    2) Если разница между макс и мин меньше чем размер по Y, то просто оставляем пустое пространство выше
+    (или можно сместить - тогда ниже). Если разница больше, чем размер экрана по Y, то в верхний - макс, в нижний - мин.
+    Значения между ними, как разница (модулей макс и мин / (кол-во позиций - 1))
+    3) шаг по x будет расчитан по масштабированию, если только точки ставить, то просто.
+    //  придумать полиномы пологие и x - коэфф.
+    */
+    const double step = 0.1;
+    lx = -1.0, rx = 3.0;
+    if (is_correct_polynomial(obj) != flag_ok || rx - lx < step || lx == NAN || rx == NAN) {
+        printf("error draw: polynomial [%X] is incorrect or left (%.2f) X more than right (%.2f);\n",
+               to_hw(obj), lx, rx);
+        return err_incorrect;
+    }
+    printf("Draw polinomial [%X], to screen (%hu, %hu);\n",
+           to_hw(obj), SCR_WIDTH, SCR_HEIGHT);
+    double max = DBL_MIN, min = DBL_MAX, x = lx, val = 0.0;
+    while (x < rx) {
+        val = calculate_polynomial(obj, x, ply_nop);
+        if (max < val)
+            max = val;
+        if (min > val)
+            min = val;
+        x += step;
+    }
+    if (max == DBL_MIN || min == DBL_MAX || fabs(max - min) < epsilon) {
+        printf("error draw: some values are incorrect, can't min or max, so scale Y;\n");
+        return err_range;
+    }
+    double scale_x = (double)(SCR_WIDTH) / (rx - lx);
+    double scale_y = (double)(SCR_HEIGHT) / (max - min) - epsilon;
+    //printf("max = %.2f;\n", (max - min) * scale_y);
+    double offs_x = ((rx - lx) < epsilon) ? 0.0 : rx - ((rx - lx) / 2.0);
+    printf("range x to draw (%.2f, %.2f), step %.2f, offset %.2f, min %.2f, max %.2f;\n",
+           lx, rx, step, offs_x, min, max);
+    printf("scale x %.2f y %0.2f;\n", scale_x, scale_y);
+    unsigned short cx = ((double)SCR_WIDTH / 2.0) - ((double)(SCR_WIDTH) * (offs_x / (rx - lx))),
+        counter = 0;    // - offs_x
+    printf("point (0.0) is center at (%hu), center y from %.2f to %.2f;\n",
+           cx, min * scale_y, max * scale_y);
+    clear_screen_ply(pencil[0], 0);
+    x = lx;
+    while (x < rx) {
+        short sx = floor(x * scale_x);
+        short sy = floor((calculate_polynomial(obj, x, ply_nop) - min) * scale_y);
+        printf("step: %d, cx + sx: %d + %d = %d, sy: %d\n", counter, cx, sx, cx + sx, sy);
+        x += step;
+        counter++;
+        screen[SCR_HEIGHT - 1 - sy][cx + sx] = pencil[pencil_colors - 1];
+    }
+    print_screen_ply();
+    return flag_ok;
+
+
+    unsigned char i = 0 , j = 0, idx = 0;
+    double x_nums_on_y[SCR_WIDTH];          // Посчитанные значения полинома для каждой X координаты
+    double x_nums[SCR_WIDTH] = {[0] = lx, [SCR_WIDTH - 1] = rx};  // X координаты. Масштабируем по ширине экран.
+    // Масштабирование по X
+    printf("Step x = %.10f;\nScaled values by X coordinate: ", step);
+    printf("%0.5f ", x_nums[0]);
+    for (i = 1; i < SCR_WIDTH - 1; ++i) {
+        x_nums[i] = x_nums[i - 1] + step;
+        printf("%0.5f ", x_nums[i]);
+    }
+    printf("%0.5f\n", x_nums[SCR_WIDTH - 1]);
+    // Расчёт значений полинома для каждого значения X + поиск минимального и максимального для Y координаты
+    x_nums_on_y[0] = calculate_polynomial(obj, x_nums[0], ply_nop);
+    double max_y = x_nums_on_y[0];
+    double min_y = x_nums_on_y[0];
+    for (i = 1; i < SCR_WIDTH; ++i) {
+        x_nums_on_y[i] = calculate_polynomial(obj, x_nums[i], ply_nop);
+        if (max_y < x_nums_on_y[i])
+            max_y = x_nums_on_y[i];
+        if (min_y > x_nums_on_y[i])
+            min_y = x_nums_on_y[i];
+    }
+    printf("Calculated values of the polynomial for each number from the range of the X coordinate:\n");
+    for (i = 0; i < SCR_WIDTH; ++i)
+        printf("%.5f ", x_nums_on_y[i]);
+    printf("\nmax = %.5f, min = %.5f;\n", max_y, min_y);
+    // Масштабирование по Y: Вверх - max_y, низ - min_y
+    if (fabs(max_y - min_y) < epsilon) {
+        printf("error draw: step y divided by zero;\n");
+        return err_incorrect;
+    }
+    double step_y = fabs(max_y - min_y) / (double)(SCR_HEIGHT - 1);
+    double y_nums[SCR_HEIGHT] = {[0] = min_y, [SCR_HEIGHT - 1] = max_y};     // Y координата. Масштабируем по высоте экрана.
+    printf("step y = %.10f;\nScaled values by Y coordinate: ", step_y);
+    printf("%0.5f, ", y_nums[0]);
+    for (i = 1; i < SCR_HEIGHT - 1; ++i) {
+        y_nums[i] = y_nums[i - 1] + step_y;
+        printf("%0.5f ", y_nums[i]);
+    }
+    printf("%0.5f\n", y_nums[SCR_HEIGHT - 1]);
+    // Формирование виртуального экрана
+    clear_screen_ply(pencil[0], 0);
+    double diff = 0;
+    for (i = 0; i < SCR_WIDTH; ++i) {     // X
+        for (j = 0, idx = 0, diff = max_y; j < SCR_HEIGHT; ++j) {  // Y, идём по Y координатам для каждого X. Ищем число с самой меньшей разницой от посчитанного X и ставим точку графика
+            double y_diff = fabs(y_nums[j] - x_nums_on_y[i]);
+            //printf("dif = %.5f, y = %.5f, x = %.5f, coord(%d,%d)\n", y_diff, y_nums[j], x_nums_on_y[i], j ,i);
+            if (diff > y_diff) {
+                diff = y_diff;
+                idx = j;
+            }
+        }
+        //printf("point on Y = %d, X = %d;\n\n", idx, i);
+        screen[SCR_HEIGHT - idx - 1][i] = pencil[3];
+    }
+    printf("Coordinate range: X(%.2f:%.2f) Y(%.2f:%.2f)\n", lx, rx, min_y, max_y);
+    print_polynomial(obj, 1);
+    print_screen_ply();
+    return flag_ok;
 }
 
 void polynomial()
@@ -1005,9 +1200,35 @@ void polynomial()
     degree(ptr_c, ply_min);
     degree(ptr_c, ply_max);
     degree(ptr_c, ply_full);
-    calculate_polynomial(ptr_c, 1.0);
-    clear_screen_ply(' ', 1);
-    print_screen_ply();
+    print_polynomial(ptr_c, 2);
+    derivative(ptr_c, ply_nop);
+    is_homogeneous(ptr_c);
+    char data_consts_d[] = {1, -1, -1, 1, 0};
+    unsigned char data_exps_d[] = {3, 3, 2, 3, 2};
+    create_polynomial(ptr_a, 2, data_consts_d, data_exps_d, 0);
+    create_polynomial(ptr_b, 2, &data_consts_d[2], &data_exps_d[2], 0);
+    printf("\n");
+    mul_polynomial(ptr_a, ptr_b);
+    resize_polynomial(ptr_c, 1);
+    set_constants(ptr_c, data_consts_d, 1, 0);
+    set_exponents(ptr_c, data_exps_d, 1, 0);
+    print_polynomial(ptr_c, 2);
+    draw_polynomial(ptr_c, -1.0, 1.0);
+    return;
+    calculate_polynomial(ptr_c, 1.0, ply_nop);
+    //clear_screen_ply(' ', 1);
+    //print_screen_ply();
+    create_polynomial(ptr_a, 4, data_consts_b, data_exps_b, ply_nop);
+    resize_polynomial(ptr_c, 4);
+    print_polynomial(ptr_c, 2);
+    print_polynomial(ptr_a, 2);
+    mul_polynomial(ptr_c, ptr_a);
+    print_polynomial(ptr_c, 2);
+    is_homogeneous(ptr_c);
+    print_polynomial(ptr_a, 3);
+    draw_polynomial(ptr_c, -1.0, 1.0);
+    mul_polynomial(ptr_a, ptr_a);
+    print_polynomial(ptr_a, 2);
     return;
     print_polynomial(ptr_b, 2);
     add_polynomial(ptr_a, ptr_b, 1);

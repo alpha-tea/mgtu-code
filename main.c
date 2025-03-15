@@ -4,5 +4,6 @@
 int main()
 {
     polynomial();
+    //weather();
     return 0;
 }
